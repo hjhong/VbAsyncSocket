@@ -110,7 +110,8 @@ End Enum
 Private Const SOCKET_ERROR                  As Long = -1
 Private Const INVALID_SOCKET                As Long = -1
 Private Const AF_INET                       As Long = 2
-'--- for IOCtl
+Private Const ERR_TIMEOUT                   As Long = &H800705B4
+'--- for ioctlsocket
 Private Const FIONREAD                      As Long = &H4004667F
 '--- for WSAGetLastError
 Private Const WSABASEERR                    As Long = 10000
@@ -125,7 +126,7 @@ Private Const WSANOTINITIALISED             As Long = (WSABASEERR + 93)
 Private Const MAXGETHOSTSTRUCT              As Long = 1024
 Private Const INADDR_ANY                    As Long = 0
 Private Const INADDR_NONE                   As Long = -1
-'--- Windows messages
+'--- Windows Messages
 Private Const WM_PAINT                      As Long = &HF
 Private Const WM_TIMER                      As Long = &H113
 Private Const WM_USER                       As Long = &H400
@@ -147,6 +148,8 @@ Private Declare Function FindWindow Lib "user32" Alias "FindWindowA" (ByVal lpCl
 Private Declare Function GetWindowLong Lib "user32" Alias "GetWindowLongA" (ByVal hWnd As Long, ByVal nIndex As Long) As Long
 Private Declare Function FormatMessage Lib "kernel32" Alias "FormatMessageA" (ByVal dwFlags As Long, lpSource As Long, ByVal dwMessageId As Long, ByVal dwLanguageId As Long, ByVal lpBuffer As String, ByVal nSize As Long, Args As Any) As Long
 Private Declare Function PostMessage Lib "user32" Alias "PostMessageA" (ByVal hWnd As Long, ByVal wMsg As Long, ByVal wParam As Long, ByVal lParam As Long) As Long
+Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
+Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
 Private Declare Function ws_connect Lib "ws2_32" Alias "connect" (ByVal s As Long, ByRef Name As SOCKADDR_IN, ByVal namelen As Long) As Long
 Private Declare Function ws_socket Lib "ws2_32" Alias "socket" (ByVal af As Long, ByVal s_type As Long, ByVal Protocol As Long) As Long
 Private Declare Function ws_closesocket Lib "ws2_32" Alias "closesocket" (ByVal s As Long) As Long
@@ -180,10 +183,6 @@ Private Declare Function ws_WSACancelAsyncRequest Lib "ws2_32" Alias "WSACancelA
     Private Declare Function KillTimer Lib "user32" (ByVal hWnd As Long, ByVal nIDEvent As Long) As Long
     Private Declare Function WaitMessage Lib "user32" () As Long
 #End If
-#If Not ImplUseShared Then
-    Private Declare Function WideCharToMultiByte Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpDefaultChar As Long, ByVal lpUsedDefaultChar As Long) As Long
-    Private Declare Function MultiByteToWideChar Lib "kernel32" (ByVal CodePage As Long, ByVal dwFlags As Long, lpMultiByteStr As Any, ByVal cchMultiByte As Long, ByVal lpWideCharStr As Long, ByVal cchWideChar As Long) As Long
-#End If
 
 Private Type SOCKADDR_IN
     sin_family          As Integer
@@ -210,8 +209,6 @@ End Type
 ' Constants and member variables
 '=========================================================================
 
-Private Const ERR_TIMEOUT           As Long = -1
-Private Const STR_ERR_TIMEOUT       As String = "Timeout expired"
 Private Const STR_HELPER_CLASS      As String = "STATIC"
 Private Const STR_HELPER_CAPTION    As String = "AsyncSocket Helper Window"
 Private Const STR_CHR1              As String = "" '--- CHAR(1)
@@ -324,7 +321,7 @@ Public Function Attach( _
             ByVal SocketHandle As Long, _
             Optional ByVal EventMask As UcsAsyncSocketEventMaskEnum = ucsSfdAll) As Boolean
     Const FUNC_NAME     As String = "Attach"
-    
+
     On Error GoTo EH
     If m_hSocket <> INVALID_SOCKET Then
         GoTo QH
@@ -348,7 +345,7 @@ End Function
 
 Public Function Detach() As Long
     Const FUNC_NAME     As String = "Detach"
-    
+
     On Error GoTo EH
     Detach = m_hSocket
     m_oHelperWindow.frRemoveSocket Me, m_lIndex
@@ -749,18 +746,14 @@ Public Function GetErrorDescription(ByVal ErrorNumber As Long) As String
     Dim lSize           As Long
     
     On Error GoTo EH
-    If ErrorNumber = ERR_TIMEOUT Then
-        GetErrorDescription = STR_ERR_TIMEOUT
-    Else
-        GetErrorDescription = Space$(2000)
-        lSize = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM Or FORMAT_MESSAGE_IGNORE_INSERTS, 0&, ErrorNumber, 0, GetErrorDescription, Len(GetErrorDescription) + 1, 0)
-        If lSize > 2 Then
-            If Mid$(GetErrorDescription, lSize - 1, 2) = vbCrLf Then
-                lSize = lSize - 2
-            End If
+    GetErrorDescription = Space$(2000)
+    lSize = FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM Or FORMAT_MESSAGE_IGNORE_INSERTS, 0&, ErrorNumber, 0, GetErrorDescription, Len(GetErrorDescription) + 1, 0)
+    If lSize > 2 Then
+        If Mid$(GetErrorDescription, lSize - 1, 2) = vbCrLf Then
+            lSize = lSize - 2
         End If
-        GetErrorDescription = Left$(GetErrorDescription, lSize)
     End If
+    GetErrorDescription = Left$(GetErrorDescription, lSize)
     Exit Function
 EH:
     PrintError FUNC_NAME
@@ -862,6 +855,9 @@ Private Sub pvDoNotify(ByVal wParam As Long, ByVal lParam As Long)
             Case ucsSfdRead
                 If Not IOCtl(FIONREAD, lBytes) Then
                     RaiseEvent OnError(m_lLastError, eEvent)
+                    If m_hSocket = INVALID_SOCKET Then
+                        GoTo QH
+                    End If
                 End If
                 If lBytes <> 0 Then
                     m_lLastError = 0
@@ -885,6 +881,7 @@ Private Sub pvDoNotify(ByVal wParam As Long, ByVal lParam As Long)
             End Select
         End If
     End If
+QH:
 End Sub
 
 Private Sub pvDoResolve(ByVal wParam As Long, ByVal lParam As Long)
@@ -908,6 +905,9 @@ Private Sub pvDoResolve(ByVal wParam As Long, ByVal lParam As Long)
             Erase m_uGetHostByName.Buffer
             m_lLastError = 0
             RaiseEvent OnResolve(pvToString(ws_inet_ntoa(uAddr.sin_addr)))
+            If m_hSocket = INVALID_SOCKET Then
+                GoTo QH
+            End If
             If SockOpt(ucsSsoType) = ucsSckStream Then
                 uAddr.sin_family = AF_INET
                 uAddr.sin_port = ws_htons(m_uGetHostByName.Port)
@@ -924,6 +924,7 @@ Private Sub pvDoResolve(ByVal wParam As Long, ByVal lParam As Long)
             End If
         End If
     End If
+QH:
 End Sub
 
 Private Function pvToSockAddr( _
@@ -1174,9 +1175,15 @@ Public Function SyncWaitForEvent( _
             If PeekMessage(uMsg, 0, 0, 0, PM_NOREMOVE) <> 0 Then
                 bHandled = False
                 RaiseEvent OnMessagePending(bHandled)
+                If m_hSocket = INVALID_SOCKET Then
+                    GoTo QH
+                End If
                 If Not bHandled Then
                     If PeekMessage(uMsg, 0, WM_PAINT, WM_PAINT, PM_REMOVE) <> 0 Then
                         Call DispatchMessage(uMsg)
+                        If m_hSocket = INVALID_SOCKET Then
+                            GoTo QH
+                        End If
                     End If
                 End If
                 bPeek = False
@@ -1196,8 +1203,8 @@ Public Function SyncWaitForEvent( _
         m_lLastError = WSAEINTR
         GoTo QH
     End If
-    m_bBlocking = bBlocking
 QH:
+    m_bBlocking = bBlocking
     If m_cMsgQueue.Count > 0 Then
         Call PostMessage(hWnd, WM_SOCKET_NOTIFY + m_lIndex, INVALID_SOCKET, 0)
     End If
