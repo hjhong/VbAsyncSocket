@@ -13,7 +13,7 @@ Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
 '=========================================================================
 '
-' VbAsyncSocket Project (c) 2018 by wqweto@gmail.com
+' VbAsyncSocket Project (c) 2018-2019 by wqweto@gmail.com
 '
 ' Simple and thin WinSock API wrappers for VB6
 '
@@ -156,7 +156,7 @@ Private m_baTlsExtra()          As Byte
 '=========================================================================
 
 Private Sub PrintError(sFunction As String)
-    Debug.Print "Critical: " & Err.Description & " (" & MODULE_NAME & "." & sFunction & ")"
+    Debug.Print "Critical error: " & Err.Description & " [" & MODULE_NAME & "." & sFunction & "]"
 End Sub
 
 '=========================================================================
@@ -201,16 +201,8 @@ Public Function Connect( _
     On Error GoTo EH
     Close_
     Set m_oSocket = New cAsyncSocket
-    If Not m_oSocket.Create() Then
-        pvSetError m_oSocket.LastError, FUNC_NAME & vbCrLf & "cAsyncSocket.Create"
-        GoTo QH
-    End If
-    If Not m_oSocket.Connect(HostAddress, HostPort) Then
-        pvSetError m_oSocket.LastError, FUNC_NAME & vbCrLf & "cAsyncSocket.Connect"
-        GoTo QH
-    End If
-    If Not m_oSocket.SyncWaitForEvent(m_lConnectTimeout, ucsSfdConnect) Then
-        pvSetError m_oSocket.LastError, FUNC_NAME & vbCrLf & "cAsyncSocket.SyncWaitForEvent"
+    If Not m_oSocket.SyncConnect(HostAddress, HostPort, Timeout:=m_lConnectTimeout) Then
+        pvSetError m_oSocket.LastError, FUNC_NAME & vbCrLf & "cAsyncSocket.SyncConnect"
         GoTo QH
     End If
     If UseTls Then
